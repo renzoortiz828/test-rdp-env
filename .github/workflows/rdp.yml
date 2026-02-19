@@ -1,4 +1,4 @@
-name: Windows-RDP-Safe
+name: Windows-Tailscale-RDP
 
 on: 
   workflow_dispatch:
@@ -7,13 +7,19 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - name: 1. Instalar Ngrok
+      - name: 1. Instalar Tailscale
+        shell: powershell
         run: |
-          choco install ngrok
-          
-      - name: 2. Autenticar Ngrok
+          # Descarga e instala el MSI de Tailscale de forma silenciosa
+          Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" -OutFile "tailscale-setup.exe"
+          Start-Process -FilePath ".\tailscale-setup.exe" -ArgumentList "/quiet", "/norestart" -Wait
+
+      - name: 2. Conectar a Tailscale
+        shell: powershell
         run: |
-          ngrok authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
+          # Usamos el Auth Key guardado en los secretos de GitHub
+          # Importante: Asegúrate de guardar tu clave como TAILSCALE_AUTH_KEY en Settings > Secrets
+          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey ${{ secrets.TAILSCALE_AUTH_KEY }} --hostname "GitHub-Runner-Win"
 
       - name: 3. Configurar Windows y RDP
         run: |
@@ -23,44 +29,21 @@ jobs:
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 1
 
-      - name: 4. Iniciar Tunel Ngrok
-        run: |
-          Start-Process ngrok -ArgumentList "tcp 3389"
-          Start-Sleep -Seconds 5
-
-      - name: 5. Obtener Direccion de Conexion
+      - name: 4. Obtener IP de Tailscale
         shell: powershell
         run: |
-          $url = ""
-          Write-Host "Buscando tunel activo..."
-          
-          for ($i=1; $i -le 20; $i++) {
-            try {
-              $response = Invoke-RestMethod -Uri "http://127.0.0.1:4040/api/tunnels"
-              $url = $response.tunnels[0].public_url
-              
-              if ($url) {
-                $clean_url = $url.Replace("tcp://", "")
-                Write-Host "=========================================="
-                Write-Host "CONEXION EXITOSA"
-                Write-Host "DIRECCION RDP: $clean_url"
-                Write-Host "USUARIO: runneradmin"
-                Write-Host "PASSWORD: Pass12345!"
-                Write-Host "=========================================="
-                return 
-              }
-            } catch {
-              Write-Host "Esperando Ngrok... (Intento $i/20)"
-            }
-            Start-Sleep -Seconds 5
-          }
+          $tsIP = (& "C:\Program Files\Tailscale\tailscale.exe" ip -4)
+          Write-Host "=========================================="
+          Write-Host "CONEXION PRIVADA EXITOSA"
+          Write-Host "DIRECCION IP TAILSCALE: $tsIP"
+          Write-Host "USUARIO: runneradmin"
+          Write-Host "PASSWORD: Pass12345!"
+          Write-Host "=========================================="
+          Write-Host "Nota: Debes estar conectado a tu red Tailscale para acceder."
 
-          Write-Error "ERROR: No se pudo obtener la URL."
-          exit 1
-
-      - name: 6. Mantener Sesion Viva
+      - name: 5. Mantener Sesion Viva
         run: |
-          Write-Host "Sesion RDP activa por 6 horas."
+          Write-Host "Sesion activa por 6 horas. Monitoreando..."
           $timeout = 360
           for ($i=1; $i -le $timeout; $i++) {
              Write-Host "Minuto $i de $timeout..."
