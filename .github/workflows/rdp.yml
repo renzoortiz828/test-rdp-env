@@ -1,4 +1,4 @@
-name: Windows-RDP
+name: Windows-RDP-Secure
 
 on: 
   workflow_dispatch:
@@ -7,58 +7,54 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - name: Instalar Ngrok vía Chocolatey
+      - name: Setup Ngrok
         run: |
           choco install ngrok
-          
-      - name: Autenticar Ngrok
-        run: |
           ngrok authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
 
-      - name: Configurar Usuario y RDP
+      - name: Enable RDP & Set User
         run: |
-          # Cambiamos la contraseña al usuario runneradmin
-          net user runneradmin Pass12345!
-          # Activamos el servicio de Escritorio Remoto
+          # Use a secret for the password to be safe!
+          $password = "Pass12345!" 
+          net user runneradmin $password
+          
+          # Enable RDP
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 1
 
-      - name: Crear Túnel
+      - name: Create Tunnel
         run: |
-          # Iniciamos el proceso de Ngrok en segundo plano
-          Start-Process powershell -ArgumentList "-NoExit -Command 'ngrok tcp 3389'"
+          # Start Ngrok and redirect output to avoid hanging the step
+          Start-Process ngrok -ArgumentList "tcp 3389"
 
-      - name: Obtener Dirección IP de Conexión
+      - name: Connection Details
         run: |
-          $url = ""
-          echo "Esperando a que el túnel de Ngrok esté listo..."
-          
-          # Bucle de reintento (12 intentos cada 5 segundos = 1 minuto de margen)
-          for ($i=1; $i -le 12; $i++) {
+          $attempts = 0
+          while ($attempts -lt 10) {
             try {
-              $tunnels = curl.exe --silent http://127.0.0.1:4040/api/tunnels | ConvertFrom-Json
-              $url = $tunnels.tunnels[0].public_url
-              if ($url) { break }
+              $response = Invoke-RestMethod -Uri "http://127.0.0.1:4040/api/tunnels"
+              $url = $response.tunnels[0].public_url
+              if ($url) {
+                $clean_url = $url.Replace("tcp://", "")
+                Write-Host "=========================================="
+                Write-Host "🚀 CONNECTION INFO"
+                Write-Host "ADDRESS: $clean_url"
+                Write-Host "USER: runneradmin"
+                Write-Host "=========================================="
+                return
+              }
             } catch { }
-            Write-Host "Buscando dirección... Intento $i/12"
+            $attempts++
             Start-Sleep -Seconds 5
           }
+          Write-Error "Failed to get Ngrok URL."
 
-          if ($url) {
-            $clean_url = $url.Replace("tcp://", "")
-            Write-Host "=========================================="
-            Write-Host "🚀 ¡LISTO PARA CONECTAR!"
-            Write-Host "DIRECCIÓN (IP): $clean_url"
-            Write-Host "USUARIO: runneradmin"
-            Write-Host "CONTRASEÑA: Pass12345!"
-            Write-Host "=========================================="
-          } else {
-            Write-Host "❌ ERROR: No se pudo obtener la URL. Revisa tu NGROK_AUTH_TOKEN en Secrets."
-            exit 1
-          }
-
-      - name: Mantener Vivo (6 horas)
+      - name: Keep Alive
         run: |
-          Write-Host "La sesión RDP está activa. No cierres este workflow."
-          Start-Sleep -Seconds 21600
+          Write-Host "RDP Active. Session will timeout in 6 hours or if manually cancelled."
+          # Loop to keep the runner busy without being totally silent
+          for ($i=1; $i -le 360; $i++) {
+             Write-Host "Session active... ($i/360 minutes)"
+             Start-Sleep -Seconds 60
+          }
